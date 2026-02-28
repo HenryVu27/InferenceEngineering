@@ -1,0 +1,11 @@
+# Phase 1: Naked Forward Pass
+torch>=2.6.0
+safetensors
+tiktoken
+transformers          # reference implementation for validation only
+accelerate            # for HF model loading in tests
+
+# Dev
+pytest
+ruff
+ipykernel             # for notebooks

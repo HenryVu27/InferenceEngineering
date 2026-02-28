@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:www.baseten.com)",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:developer.nvidia.com)",
+      "WebFetch(domain:bentoml.com)",
+      "WebFetch(domain:www.azilen.com)",
+      "WebFetch(domain:andrewkchan.dev)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:skyzh.github.io)",
+      "WebFetch(domain:michalpitr.substack.com)",
+      "Bash(wc:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git restore:*)",
+      "WebFetch(domain:www.henryvu.blog)",
+      "Bash(python:*)",
+      "Bash(pip:*)",
+      "Bash(py:*)",
+      "Bash(where:*)",
+      "Bash(\"C:\\\\Users\\\\Vuduc\\\\.local\\\\bin\\\\python3.12.exe\":*)",
+      "Bash(source:*)"
+    ]
+  }
+}

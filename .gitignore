@@ -1,0 +1,29 @@
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Model weights (never commit)
+*.safetensors
+*.bin
+*.gguf
+models/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Benchmark results (track selectively)
+# benchmarks/results/*.json
+
+# Jupyter
+.ipynb_checkpoints/
