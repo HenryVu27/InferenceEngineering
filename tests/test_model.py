@@ -452,6 +452,72 @@ class TestSampler:
         result = greedy(logits)
         assert result == 1, f"Expected 1, got {result}"
 
+    def test_temperature_sharpens(self):
+        """Low temperature should make the distribution peakier."""
+        logits = torch.tensor([1.0, 2.0, 3.0])
+        cold = temperature_scale(logits, 0.1)
+        hot = temperature_scale(logits, 10.0)
+
+        # Cold: differences amplified (3.0/0.1=30 vs 1.0/0.1=10)
+        cold_range = cold.max() - cold.min()
+        hot_range = hot.max() - hot.min()
+        assert cold_range > hot_range, "Low temp should amplify differences"
+
+    def test_temperature_one_is_identity(self):
+        """Temperature=1.0 should not change logits."""
+        logits = torch.tensor([1.0, 2.0, 3.0])
+        result = temperature_scale(logits, 1.0)
+        assert torch.allclose(result, logits)
+
+    def test_top_k_keeps_k_tokens(self):
+        """Top-k should keep exactly k tokens, rest should be -inf."""
+        logits = torch.tensor([1.0, 5.0, 3.0, 2.0, 4.0])
+        result = top_k(logits, k=3)
+
+        kept = (result != float('-inf')).sum().item()
+        assert kept == 3, f"Expected 3 tokens kept, got {kept}"
+        # The top 3 values (5.0, 4.0, 3.0) should be unchanged
+        assert result[1] == 5.0  # index 1 = 5.0
+        assert result[4] == 4.0  # index 4 = 4.0
+        assert result[2] == 3.0  # index 2 = 3.0
+
+    def test_top_p_filters_tail(self):
+        """Top-p should keep tokens until cumulative probability >= p."""
+        # Logits designed so softmax gives roughly [0.05, 0.7, 0.15, 0.02, 0.08]
+        logits = torch.tensor([0.0, 3.0, 1.5, -1.0, 0.5])
+        result = top_p(logits, p=0.9)
+
+        # Token at index 1 (prob ~0.7) should always be kept
+        assert result[1] != float('-inf'), "Highest prob token should be kept"
+        # Token at index 3 (prob ~0.02) should likely be filtered
+        # (it's in the tail beyond 90%)
+
+    def test_min_p_relative_threshold(self):
+        """Min-p should filter tokens below p * max_probability."""
+        # One dominant token, rest much smaller
+        logits = torch.tensor([10.0, 1.0, 0.0, -1.0, -5.0])
+        result = min_p(logits, p=0.1)
+
+        # Token 0 (highest) should always be kept
+        assert result[0] != float('-inf')
+        # Token 4 (very low prob relative to max) should be filtered
+        assert result[4] == float('-inf'), "Very low prob token should be filtered"
+
+    def test_repetition_penalty_reduces_repeated(self):
+        """Repeated tokens should have lower logits after penalty."""
+        logits = torch.tensor([5.0, 3.0, 1.0, -1.0])
+        generated = [0, 2]  # tokens 0 and 2 were generated before
+
+        result = repetition_penalty(logits, generated, penalty=1.5)
+
+        # Positive logits divided by penalty → smaller
+        assert result[0] < logits[0], "Positive repeated logit should decrease"
+        # Positive logit at index 2 also divided
+        assert result[2] < logits[2], "Positive repeated logit should decrease"
+        # Non-repeated tokens unchanged
+        assert result[1] == logits[1], "Non-repeated token should be unchanged"
+        assert result[3] == logits[3], "Non-repeated token should be unchanged"
+
 
 # ─── Integration tests (need model weights) ─────────────────────────────────
 
