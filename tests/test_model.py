@@ -323,6 +323,30 @@ class TestAttention:
         assert torch.allclose(result_masked[:, 0], result_modified[:, 0], atol=1e-5), \
             "First token should not be affected by future tokens when mask is applied"
 
+    def test_bfloat16_precision(self):
+        """Attention should work in bfloat16 without NaN."""
+        B, S = 1, 4
+        q = torch.randn(B, S, NUM_Q_HEADS, HEAD_DIM, dtype=torch.bfloat16)
+        k = torch.randn(B, S, NUM_KV_HEADS, HEAD_DIM, dtype=torch.bfloat16)
+        v = torch.randn(B, S, NUM_KV_HEADS, HEAD_DIM, dtype=torch.bfloat16)
+
+        result = attention(q, k, v)
+
+        assert not torch.isnan(result).any(), "Attention produced NaN in bfloat16"
+        assert result.dtype == torch.bfloat16
+
+    def test_different_batch_sizes(self):
+        """Attention should work with batch sizes > 1."""
+        for B in [1, 2, 4]:
+            S = 4
+            q = torch.randn(B, S, NUM_Q_HEADS, HEAD_DIM)
+            k = torch.randn(B, S, NUM_KV_HEADS, HEAD_DIM)
+            v = torch.randn(B, S, NUM_KV_HEADS, HEAD_DIM)
+
+            result = attention(q, k, v)
+            assert result.shape == (B, S, NUM_Q_HEADS, HEAD_DIM), \
+                f"Wrong shape for batch={B}: {result.shape}"
+
 
 class TestSwiGLU:
     """Test SwiGLU FFN."""

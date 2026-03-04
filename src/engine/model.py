@@ -287,13 +287,28 @@ def attention(
         Attention output [batch, seq_len, num_q_heads, head_dim]
     """
     # TODO: Implement GQA.
-    #   1. Expand KV heads: repeat_interleave(k, GQA_RATIO, dim=2) → [B, S, 28, 128]
-    #      Same for v.
-    #   2. Transpose to [B, heads, S, head_dim] for matmul
-    #   3. Compute scores: Q @ K^T / sqrt(HEAD_DIM)   (scale = 1/11.3137 ≈ 1/sqrt(128))
-    #   4. Apply causal mask: scores.masked_fill(mask == 0, float('-inf'))
-    #   5. Softmax over last dim
-    #   6. Compute output: scores @ V
+    #
+    #   Option A — repeat_interleave (simple, recommended first):
+    #   1. Expand KV heads: k = k.repeat_interleave(GQA_RATIO, dim=2) → [B, S, 28, 128]
+    #      Same for v. This copies each KV head 7 times to match Q head count.
+    #      Memory cost: allocates 7x the KV memory.
+    #
+    #   Option B — broadcast (memory-efficient alternative):
+    #   1. Reshape Q to group heads: q = q.view(B, S, NUM_KV_HEADS, GQA_RATIO, HEAD_DIM)
+    #   2. Reshape K/V to add broadcast dim: k = k.unsqueeze(3)  → [B, S, 4, 1, 128]
+    #   3. Attention scores broadcast: [B, 4, 7, S, D] @ [B, 4, 1, D, S] → [B, 4, 7, S, S]
+    #   4. No extra memory allocated — PyTorch broadcasts without copying.
+    #   Try this after Option A works, to learn the optimization.
+    #
+    #   After KV expansion (or broadcast setup):
+    #   2. Transpose to [B, heads, S, head_dim] for batched matmul
+    #   3. Compute scores: Q @ K^T / sqrt(HEAD_DIM)
+    #      scale = 1.0 / (HEAD_DIM ** 0.5)   — for head_dim=128: scale ≈ 0.0884
+    #   4. Apply causal mask: scores.masked_fill(mask == False, float('-inf'))
+    #      Scores for future positions become -inf → softmax gives them 0 weight.
+    #   5. Softmax over last dim (in float32 for stability):
+    #      scores = torch.softmax(scores.float(), dim=-1).to(v.dtype)
+    #   6. Compute output: scores @ V    → [B, heads, S, head_dim]
     #   7. Transpose back to [B, S, heads, head_dim]
     raise NotImplementedError
 
