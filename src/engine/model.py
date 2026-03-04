@@ -191,10 +191,14 @@ def rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float = RMSNORM_EPS) -> 
         Normalized tensor, same shape as x.
     """
     # TODO: Implement RMSNorm.
-    #   1. Compute variance: mean(x², dim=-1, keepdim=True)
-    #   2. Compute rsqrt: 1 / sqrt(variance + eps)
-    #   3. Normalize: x * rsqrt
-    #   4. Scale: normalized * weight
+    #   1. Save input dtype: input_dtype = x.dtype
+    #   2. Upcast to float32: x = x.float()
+    #      IMPORTANT: bfloat16 has only 8 bits of mantissa. Computing mean(x²)
+    #      in bfloat16 with large values loses precision and causes divergence
+    #      from HuggingFace. Always compute in float32.
+    #   3. Compute variance: variance = x.pow(2).mean(dim=-1, keepdim=True)
+    #   4. Normalize: x = x * torch.rsqrt(variance + eps)
+    #   5. Scale and cast back: return (x * weight).to(input_dtype)
     raise NotImplementedError
 
 

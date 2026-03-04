@@ -192,6 +192,38 @@ class TestRMSNorm:
         result = rmsnorm(x, weight, RMSNORM_EPS)
         assert result.shape == x.shape
 
+    def test_float32_upcasting_with_bfloat16(self):
+        """RMSNorm should upcast to float32 internally for precision.
+
+        With large-magnitude bfloat16 inputs, computing variance directly in
+        bfloat16 loses precision. The implementation must compute in float32
+        then cast back.
+        """
+        torch.manual_seed(42)
+        x = (torch.randn(1, 4, HIDDEN_DIM) * 500).to(torch.bfloat16)  # large values
+        weight = torch.ones(HIDDEN_DIM, dtype=torch.bfloat16)
+
+        result = rmsnorm(x, weight, RMSNORM_EPS)
+
+        # Result should be bfloat16 (same as input)
+        assert result.dtype == torch.bfloat16, f"Expected bfloat16, got {result.dtype}"
+        # RMS should still be ~1.0 despite bfloat16 input
+        rms = torch.sqrt(torch.mean(result.float() ** 2, dim=-1))
+        assert torch.allclose(rms, torch.ones_like(rms), atol=0.05), \
+            f"RMS should be ~1.0, got {rms}"
+
+    def test_scaling_by_weight(self):
+        """Non-unit weight should scale the normalized output."""
+        x = torch.randn(1, 2, HIDDEN_DIM)
+        weight = torch.full((HIDDEN_DIM,), 2.0)
+
+        result = rmsnorm(x, weight, RMSNORM_EPS)
+
+        # RMS of result should be ~2.0 (scaled by weight)
+        rms = torch.sqrt(torch.mean(result ** 2, dim=-1))
+        assert torch.allclose(rms, torch.full_like(rms, 2.0), atol=0.1), \
+            f"RMS should be ~2.0 with weight=2, got {rms}"
+
 
 class TestRoPE:
     """Test Rotary Position Embedding."""
