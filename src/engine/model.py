@@ -206,9 +206,21 @@ def rotary_embedding(q: torch.Tensor, k: torch.Tensor, positions: torch.Tensor) 
     """Apply Rotary Position Embedding (RoPE) to Q and K.
 
     RoPE encodes position by rotating pairs of dimensions. For head_dim=128,
-    there are 64 frequency pairs. Each pair (x0, x1) is rotated by angle θ*pos.
+    there are 64 frequency pairs. Each pair is rotated by angle θ*pos.
 
     Frequencies: θ_i = 1 / (theta_base^(2i/head_dim)) for i in [0, 64)
+
+    IMPORTANT — RoPE variants:
+      - Traditional (interleaved): pairs are (dim0, dim1), (dim2, dim3), ...
+        Uses x[..., 0::2] and x[..., 1::2].
+      - Split-half (HuggingFace): pairs are (dim0, dim64), (dim1, dim65), ...
+        Uses x[..., :half] and x[..., half:].
+
+    Qwen2.5 (and Llama, Gemma) use the SPLIT-HALF variant in HuggingFace.
+    The split-half approach uses a rotate_half() helper:
+      rotate_half(x) = [-x[..., half:], x[..., :half]]
+
+    Then: x_rotated = x * cos + rotate_half(x) * sin
 
     Args:
         q: Query tensor  [batch, seq_len, num_q_heads, head_dim]
@@ -216,18 +228,41 @@ def rotary_embedding(q: torch.Tensor, k: torch.Tensor, positions: torch.Tensor) 
         positions: Position indices [batch, seq_len]
 
     Returns:
-        (q_rotated, k_rotated) — same shapes as inputs.
+        (q_rotated, k_rotated) — same shapes and dtype as inputs.
     """
-    # TODO: Implement RoPE.
-    #   1. Compute frequency pairs: freqs = 1.0 / (ROPE_THETA ** (torch.arange(0, HEAD_DIM, 2) / HEAD_DIM))
-    #   2. Compute angles: angles = positions.unsqueeze(-1) * freqs  → [batch, seq_len, 64]
-    #   3. Build cos/sin: [batch, seq_len, 1, head_dim] (repeat each freq for the pair)
-    #   4. Apply rotation: split q/k into even/odd, rotate using cos/sin
-    #      q_rot = q_even * cos - q_odd * sin
-    #      q_rot_odd = q_even * sin + q_odd * cos
-    #      q_out = interleave(q_rot, q_rot_odd)
+    # TODO: Implement RoPE (split-half variant to match HuggingFace).
     #
-    # Note: RoPE applies to full head_dim (128), 64 rotation pairs. Not partial.
+    #   1. Compute inverse frequencies:
+    #      inv_freq = 1.0 / (ROPE_THETA ** (torch.arange(0, HEAD_DIM, 2).float() / HEAD_DIM))
+    #      → shape [64] — one frequency per dimension pair
+    #
+    #   2. Compute angles:
+    #      angles = positions.unsqueeze(-1).float() * inv_freq   → [B, S, 64]
+    #      These are the rotation angles for each position and frequency pair.
+    #
+    #   3. Build cos/sin for full head_dim (duplicate for split-half):
+    #      emb = torch.cat([angles, angles], dim=-1)             → [B, S, 128]
+    #      cos = torch.cos(emb).unsqueeze(2)                     → [B, S, 1, 128]
+    #      sin = torch.sin(emb).unsqueeze(2)                     → [B, S, 1, 128]
+    #      The unsqueeze(2) broadcasts across heads.
+    #
+    #   4. Define rotate_half helper:
+    #      def rotate_half(x):
+    #          x1 = x[..., : x.shape[-1] // 2]    # first 64 dims
+    #          x2 = x[..., x.shape[-1] // 2 :]    # last 64 dims
+    #          return torch.cat([-x2, x1], dim=-1)
+    #
+    #   5. Apply rotation:
+    #      q_rot = q.float() * cos + rotate_half(q.float()) * sin
+    #      k_rot = k.float() * cos + rotate_half(k.float()) * sin
+    #
+    #   6. Cast back to input dtype:
+    #      return q_rot.to(q.dtype), k_rot.to(k.dtype)
+    #
+    # Why split-half instead of interleaved?
+    # Both are mathematically equivalent — they define different dimension pairings.
+    # HuggingFace Qwen2 uses split-half (rotate_half), so we match it for correctness.
+    # See: docs/phase1-guide.md "RoPE Variants" section for both implementations.
     raise NotImplementedError
 
 

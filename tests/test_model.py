@@ -226,7 +226,7 @@ class TestRMSNorm:
 
 
 class TestRoPE:
-    """Test Rotary Position Embedding."""
+    """Test Rotary Position Embedding (split-half variant, as used by HuggingFace Qwen2)."""
 
     def test_shape_preserved(self):
         """RoPE should not change tensor shapes."""
@@ -249,6 +249,41 @@ class TestRoPE:
 
         assert torch.allclose(q_rot, q, atol=1e-5), "RoPE at position 0 should be identity"
         assert torch.allclose(k_rot, k, atol=1e-5), "RoPE at position 0 should be identity"
+
+    def test_dtype_preserved(self):
+        """Output dtype should match input dtype."""
+        for dtype in [torch.float32, torch.bfloat16]:
+            q = torch.randn(1, 4, NUM_Q_HEADS, HEAD_DIM, dtype=dtype)
+            k = torch.randn(1, 4, NUM_KV_HEADS, HEAD_DIM, dtype=dtype)
+            positions = torch.arange(4).unsqueeze(0)
+
+            q_rot, k_rot = rotary_embedding(q, k, positions)
+            assert q_rot.dtype == dtype, f"Expected {dtype}, got {q_rot.dtype}"
+            assert k_rot.dtype == dtype
+
+    def test_different_positions_give_different_results(self):
+        """Same input at different positions should produce different outputs."""
+        q = torch.randn(1, 1, NUM_Q_HEADS, HEAD_DIM)
+        k = torch.randn(1, 1, NUM_KV_HEADS, HEAD_DIM)
+
+        q_rot0, _ = rotary_embedding(q, k, torch.tensor([[0]]))
+        q_rot5, _ = rotary_embedding(q, k, torch.tensor([[5]]))
+
+        assert not torch.allclose(q_rot0, q_rot5, atol=1e-3), \
+            "Different positions should produce different rotations"
+
+    def test_rotation_is_norm_preserving(self):
+        """RoPE is a rotation — it should preserve vector norms."""
+        q = torch.randn(1, 4, NUM_Q_HEADS, HEAD_DIM)
+        k = torch.randn(1, 4, NUM_KV_HEADS, HEAD_DIM)
+        positions = torch.arange(4).unsqueeze(0)
+
+        q_rot, k_rot = rotary_embedding(q, k, positions)
+
+        q_norm_before = torch.norm(q, dim=-1)
+        q_norm_after = torch.norm(q_rot, dim=-1)
+        assert torch.allclose(q_norm_before, q_norm_after, atol=1e-4), \
+            "RoPE should preserve vector norms (it's a rotation)"
 
 
 class TestAttention:
