@@ -20,7 +20,8 @@ def greedy(logits: torch.Tensor) -> int:
         Token ID with highest logit.
     """
     # TODO: Return argmax of logits.
-    return logits.argmax(dim=-1).item()
+    #   return logits.argmax(dim=-1).item()
+    raise NotImplementedError
 
 
 def temperature_scale(logits: torch.Tensor, temperature: float) -> torch.Tensor:

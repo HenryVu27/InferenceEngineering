@@ -34,7 +34,15 @@ from src.engine.model import (
     RMSNORM_EPS,
 )
 from src.engine.tokenizer import QwenTokenizer
-from src.engine.sampler import greedy
+from src.engine.sampler import (
+    greedy,
+    temperature_scale,
+    top_k,
+    top_p,
+    min_p,
+    repetition_penalty,
+    sample,
+)
 
 MODEL_DIR = os.environ.get("MODEL_DIR", "")
 
@@ -154,6 +162,22 @@ class TestSwiGLU:
         result = swiglu_ffn(x, gate, up, down)
 
         assert result.shape == x.shape
+
+
+class TestSampler:
+    """Test sampling functions."""
+
+    def test_greedy_returns_argmax(self):
+        """Greedy should return the index of the highest logit."""
+        logits = torch.tensor([1.0, 3.0, 2.0, 0.5])
+        result = greedy(logits)
+        assert result == 1, f"Expected 1 (argmax), got {result}"
+
+    def test_greedy_with_negative_logits(self):
+        """Greedy should work with all-negative logits."""
+        logits = torch.tensor([-5.0, -1.0, -3.0, -2.0])
+        result = greedy(logits)
+        assert result == 1, f"Expected 1, got {result}"
 
 
 # ─── Integration tests (need model weights) ─────────────────────────────────
