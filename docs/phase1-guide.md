@@ -813,6 +813,39 @@ Do the same for K, then return:
     return q_out.to(q.dtype), k_out.to(k.dtype)
 ```
 
+#### RoPE Variants: Traditional vs Split-Half
+
+The code above shows the **traditional (interleaved)** variant for reference. However,
+HuggingFace's Qwen2 implementation uses the **split-half** variant. Both are mathematically
+equivalent but pair dimensions differently:
+
+**Traditional (interleaved):**
+Pairs adjacent dimensions: (dim0, dim1), (dim2, dim3), ..., (dim126, dim127)
+```python
+q_even = q[..., 0::2]   # dims 0, 2, 4, ...
+q_odd  = q[..., 1::2]   # dims 1, 3, 5, ...
+q_rot = torch.stack([q_even * cos - q_odd * sin,
+                      q_even * sin + q_odd * cos], dim=-1).flatten(-2)
+```
+
+**Split-half (HuggingFace — use this one):**
+Pairs first half with second half: (dim0, dim64), (dim1, dim65), ..., (dim63, dim127)
+```python
+def rotate_half(x):
+    x1 = x[..., : x.shape[-1] // 2]   # dims 0-63
+    x2 = x[..., x.shape[-1] // 2 :]   # dims 64-127
+    return torch.cat([-x2, x1], dim=-1)
+
+# Frequencies are doubled: emb = cat([angles, angles], dim=-1)  → [B, S, 128]
+q_rot = q * cos + rotate_half(q) * sin
+```
+
+**Which to use?** Match your reference implementation. Since we validate against
+HuggingFace transformers, use the **split-half** variant. The stubs in `model.py`
+use split-half accordingly.
+
+Reference: [RoFormer: Enhanced Transformer with Rotary Position Embedding](https://arxiv.org/abs/2104.09864) (Su et al., 2021)
+
 ### 3.4 `make_causal_mask(seq_len, device)` — prevent looking at the future
 
 **Why a causal mask?** During generation, token 3 should only attend to tokens 0, 1, 2, 3 —
