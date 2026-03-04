@@ -88,7 +88,7 @@ class QwenTokenizer:
         # Each message: <|im_start|>{role}\n{content}<|im_end|>\n
         # After last message, append <|im_start|>assistant\n to prompt generation.
         # Encode special tokens as their IDs directly (don't try to encode the text form).
-        raise NotImplementedError
+        
 
     def is_eos(self, token_id: int) -> bool:
         """Check if token is an end-of-sequence token.
