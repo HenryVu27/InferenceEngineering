@@ -20,7 +20,7 @@ def greedy(logits: torch.Tensor) -> int:
         Token ID with highest logit.
     """
     # TODO: Return argmax of logits.
-    raise NotImplementedError
+    return logits.argmax(dim=-1).item()
 
 
 def temperature_scale(logits: torch.Tensor, temperature: float) -> torch.Tensor:
@@ -39,7 +39,9 @@ def temperature_scale(logits: torch.Tensor, temperature: float) -> torch.Tensor:
     """
     # TODO: Return logits / temperature.
     # Handle edge case: temperature very close to 0 → just return logits unchanged.
-    raise NotImplementedError
+    if temperature < 1e-8:
+        return logits
+    return logits / temperature
 
 
 def top_k(logits: torch.Tensor, k: int) -> torch.Tensor:
@@ -55,7 +57,9 @@ def top_k(logits: torch.Tensor, k: int) -> torch.Tensor:
     # TODO: Implement top-k filtering.
     #   1. Find the k-th largest value: torch.topk(logits, k).values[-1]
     #   2. Set everything below that threshold to -inf
-    raise NotImplementedError
+    top_values, _ = torch.topk(logits, k)
+    mask = logits < top_values[-1]
+    return logits.masked_fill(mask, float('inf'))
 
 
 def top_p(logits: torch.Tensor, p: float) -> torch.Tensor:
@@ -74,7 +78,13 @@ def top_p(logits: torch.Tensor, p: float) -> torch.Tensor:
     #   3. Find cutoff where cumsum >= p
     #   4. Set everything after cutoff to -inf
     #   5. Unsort back to original order
-    raise NotImplementedError
+    mask = torch.zeroes_like(logits, dtype = torch.bool)
+    probs = torch.softmax(logits)
+    sorted_probs, sorted_indices = torch.sort(probs, descending = True)
+    cum_probs = torch.cumsum(sorted_probs)
+    sorted_mask = cum_sum - sorted_probs >= p
+    mask.scatter_(0, sorted_indices, sorted_mask)
+    return logits.masked_fill(mask, float(-inf))
 
 
 def min_p(logits: torch.Tensor, p: float) -> torch.Tensor:
@@ -94,7 +104,11 @@ def min_p(logits: torch.Tensor, p: float) -> torch.Tensor:
     #   2. Find max probability
     #   3. Threshold = p * max_probability
     #   4. Set logits where prob < threshold to -inf
-    raise NotImplementedError
+    probs = torch.softmax(logits)
+    max_prob = probs.argmax(dim=-1).item()
+    threshold = p * max_prob
+    mask = probs < threshold
+    return logits.masked_fill(mask, float(-inf))
 
 
 def repetition_penalty(
@@ -118,7 +132,14 @@ def repetition_penalty(
         Penalized logits [vocab_size]
     """
     # TODO: Implement repetition penalty.
-    raise NotImplementedError
+    logits = logits.clone
+    if not generated_ids:
+        return logits
+    token_ids = torch.tensor(generated_ids, dtype = torch.long, device = logits.device)
+    scores = logits[token_ids] # get logits of generated tokens
+    scores = torch.where(scores > 0, scores / penalty, scores * penalty) # fancy indexing
+    logits[token_ids] = scores # write back updated scores to logits
+    return logits
 
 
 def sample(
@@ -160,4 +181,14 @@ def sample(
     #   5. Apply min-p if min_p_val > 0.0
     #   6. Convert to probabilities: softmax(logits)
     #   7. Sample: torch.multinomial(probs, num_samples=1)
-    raise NotImplementedError
+    if rep_penalty > 1.0 and generated_ids:
+        logits = repetition_penalty(logits, generated_ids, rep_penalty)
+    logits = temperature_scale(logits, temperature)
+    if top_k_val > 0:
+        logits = top_k(logits, top_k_val)
+    if top_p_val < 1.0:
+        logits = top_p(logits, top_p_val)
+    if min_p_val > 0.0:
+        logits = min_p(logits, min_p_val)
+    probs = torch.softmax(logits)
+    return torch.multinomial(probs, num_samples=1).item()
