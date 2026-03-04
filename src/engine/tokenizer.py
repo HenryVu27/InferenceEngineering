@@ -38,7 +38,9 @@ class QwenTokenizer:
         # Look for the vocab file and special tokens config.
         # Hint: check tokenizer_config.json for special token mappings,
         #       and load the mergeable ranks from the vocab file.
-        raise NotImplementedError("Load tiktoken tokenizer from model_dir")
+        model_dir = Path(model_dir)
+        from transformers import AutoTokenizer
+        self._tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
 
     def encode(self, text: str) -> list[int]:
         """Encode text to token IDs.
@@ -51,7 +53,7 @@ class QwenTokenizer:
         """
         # TODO: Encode text using tiktoken.
         # Remember: Qwen does NOT prepend a BOS token.
-        raise NotImplementedError
+        return self._tokenizer.encode(text, add_special_tokens=False)
 
     def decode(self, token_ids: list[int]) -> str:
         """Decode token IDs back to text.
@@ -63,7 +65,7 @@ class QwenTokenizer:
             Decoded text string.
         """
         # TODO: Decode token IDs using tiktoken.
-        raise NotImplementedError
+        return self._tokenizer.decode(token_ids, skip_special_tokens=False)
 
     def encode_chat(self, messages: list[dict[str, str]]) -> list[int]:
         """Apply ChatML template and encode.
