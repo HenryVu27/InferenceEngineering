@@ -21,7 +21,8 @@
       "Bash(py:*)",
       "Bash(where:*)",
       "Bash(\"C:\\\\Users\\\\Vuduc\\\\.local\\\\bin\\\\python3.12.exe\":*)",
-      "Bash(source:*)"
+      "Bash(source:*)",
+      "Bash(.venv/Scripts/python:*)"
     ]
   }
 }
