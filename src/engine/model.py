@@ -489,11 +489,16 @@ def forward(
     #
     # 1. Embedding lookup
     #    x = weights["model.embed_tokens.weight"][token_ids]  → [B, S, 3584]
+    #    This is just a table lookup: token_id 42 → row 42 of the embedding matrix.
     #
     # 2. Build positions if not provided
-    #    positions = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch, -1)
+    #    if positions is None:
+    #        positions = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch, -1)
     #
-    # 3. Build causal mask
+    # 3. Build causal mask (only needed when seq_len > 1)
+    #    Optimization: for single-token decode, masking is unnecessary since there's
+    #    only one position. But for Phase 1 (no KV cache), we always process full
+    #    sequences, so always create the mask.
     #    mask = make_causal_mask(seq_len, device=device)
     #
     # 4. Run through all 28 layers
@@ -503,8 +508,10 @@ def forward(
     # 5. Final norm
     #    x = rmsnorm(x, weights["model.norm.weight"])
     #
-    # 6. LM head (no bias, embeddings NOT tied)
+    # 6. LM head (no bias, embeddings NOT tied in Qwen2.5-7B)
     #    logits = x @ weights["lm_head.weight"].T  → [B, S, 152064]
+    #    Note: some smaller Qwen2 models tie embed_tokens and lm_head weights.
+    #    Qwen2.5-7B does NOT — it has a separate lm_head.weight.
     #
     # return logits
     raise NotImplementedError
@@ -541,17 +548,36 @@ def generate(
 
     # TODO: Implement naive autoregressive generation.
     #
+    # This has two logical phases (even though Phase 1 doesn't optimize them separately):
+    #   PREFILL: Process the full prompt to get the first next-token prediction.
+    #   DECODE:  Generate one token at a time, appending to the sequence.
+    #
+    # In Phase 1 (no KV cache), both phases look identical — we always re-process
+    # the entire sequence. In Phase 2, prefill processes the prompt in one shot,
+    # and decode only processes the new token (using cached K/V from previous steps).
+    #
     # tokens = prompt_tokens.copy()
     # for _ in range(max_new_tokens):
     #     input_ids = torch.tensor([tokens], device=device)     # [1, current_len]
     #     logits = forward(input_ids, weights)                   # [1, current_len, vocab]
     #     next_logits = logits[0, -1, :]                         # [vocab] — last position only
+    #
+    #     # Numerical stability: subtract logsumexp before sampling.
+    #     # logsumexp = log(sum(exp(logits))). Subtracting it converts logits to
+    #     # log-probabilities. This prevents overflow in softmax during sampling.
+    #     # next_logits = next_logits - torch.logsumexp(next_logits, dim=-1, keepdim=True)
+    #
     #     next_token = sample_fn(next_logits)
-    #     if next_token in EOS_IDS:
+    #
+    #     # Qwen2.5 has TWO end-of-sequence tokens:
+    #     #   151645 = <|im_end|>     (end of assistant turn in ChatML)
+    #     #   151643 = <|endoftext|>  (end of text)
+    #     if next_token in (151645, 151643):
     #         break
     #     tokens.append(next_token)
     # return tokens
     #
-    # NOTE: This recomputes ALL previous tokens every step. That's O(n²) and slow.
-    # That's intentional for Phase 1 — Phase 2 fixes it with KV cache.
+    # NOTE: This recomputes ALL previous tokens every step. That's O(n²) in FLOPs
+    # and painfully slow. For a 100-token generation, the last step processes all
+    # 100+ tokens just to predict token 101. Phase 2 fixes this with KV cache.
     raise NotImplementedError
