@@ -336,11 +336,19 @@ def swiglu_ffn(
         Output [batch, seq_len, hidden_dim]
     """
     # TODO: Implement SwiGLU.
-    #   1. gate = x @ gate_weight.T        → [B, S, 18944]
-    #   2. gate = SiLU(gate)               → x * sigmoid(x), or use torch.nn.functional.silu
-    #   3. up = x @ up_weight.T            → [B, S, 18944]
-    #   4. fused = gate * up               → element-wise multiply
-    #   5. output = fused @ down_weight.T  → [B, S, 3584]
+    #   1. gate = x @ gate_weight.T        → [B, S, ffn_dim]
+    #   2. gate = silu(gate)               → use YOUR silu() function (not torch's)
+    #   3. up = x @ up_weight.T            → [B, S, ffn_dim]
+    #   4. fused = gate * up               → element-wise gating
+    #   5. output = fused @ down_weight.T  → [B, S, hidden_dim]
+    #
+    # Why SwiGLU instead of standard FFN (just up → activation → down)?
+    # Standard FFN: down(relu(up(x)))           — 2 projections
+    # SwiGLU:       down(silu(gate(x)) * up(x)) — 3 projections but better quality
+    # The gate and up projections create a gating mechanism: the gate "decides"
+    # how much of each up-projected feature to keep. This is why FFN dim is 5.29x
+    # instead of the usual 4x — the third projection costs extra parameters.
+    # Reference: "GLU Variants Improve Transformer" (Shazeer, 2020)
     raise NotImplementedError
 
 
