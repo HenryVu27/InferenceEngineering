@@ -26,7 +26,11 @@ from src.engine.model import (
     rmsnorm,
     rotary_embedding,
     attention,
+    simple_attention,
     swiglu_ffn,
+    softmax,
+    silu,
+    make_causal_mask,
     HIDDEN_DIM,
     HEAD_DIM,
     NUM_Q_HEADS,
@@ -60,6 +64,110 @@ def requires_model(func):
 
 
 # ─── Unit tests (no model weights needed) ───────────────────────────────────
+
+class TestSoftmax:
+    """Test manual softmax implementation."""
+
+    def test_matches_torch(self):
+        """Manual softmax should match torch.softmax."""
+        torch.manual_seed(42)
+        x = torch.randn(2, 10)
+        result = softmax(x, dim=-1)
+        expected = torch.softmax(x, dim=-1)
+        assert torch.allclose(result, expected, atol=1e-6), \
+            f"Max diff: {(result - expected).abs().max().item()}"
+
+    def test_numerical_stability(self):
+        """Should not overflow/NaN with large values."""
+        x = torch.tensor([[1000.0, 1001.0, 1002.0]])
+        result = softmax(x, dim=-1)
+        assert not torch.isnan(result).any(), "Softmax produced NaN with large inputs"
+        assert torch.allclose(result.sum(dim=-1), torch.ones(1), atol=1e-6), \
+            "Softmax should sum to 1"
+
+    def test_sums_to_one(self):
+        """Softmax output should sum to 1 along the specified dim."""
+        x = torch.randn(3, 5, 8)
+        result = softmax(x, dim=-1)
+        sums = result.sum(dim=-1)
+        assert torch.allclose(sums, torch.ones_like(sums), atol=1e-6)
+
+
+class TestSiLU:
+    """Test manual SiLU activation."""
+
+    def test_matches_torch(self):
+        """Manual SiLU should match torch.nn.functional.silu."""
+        torch.manual_seed(42)
+        x = torch.randn(2, 10)
+        result = silu(x)
+        expected = torch.nn.functional.silu(x)
+        assert torch.allclose(result, expected, atol=1e-6), \
+            f"Max diff: {(result - expected).abs().max().item()}"
+
+    def test_zero_at_zero(self):
+        """SiLU(0) = 0 * sigmoid(0) = 0 * 0.5 = 0."""
+        result = silu(torch.tensor([0.0]))
+        assert torch.allclose(result, torch.tensor([0.0]), atol=1e-7)
+
+    def test_shape_preserved(self):
+        """Output shape should match input."""
+        x = torch.randn(3, 5, 8)
+        assert silu(x).shape == x.shape
+
+
+class TestSimpleAttention:
+    """Test simple scaled dot-product attention (same head count for Q/K/V)."""
+
+    def test_output_shape(self):
+        """Output should match Q shape."""
+        B, S, H, D = 1, 4, 8, 64
+        q = torch.randn(B, S, H, D)
+        k = torch.randn(B, S, H, D)
+        v = torch.randn(B, S, H, D)
+        result = simple_attention(q, k, v)
+        assert result.shape == (B, S, H, D)
+
+    def test_matches_torch_sdpa(self):
+        """Should match PyTorch's scaled_dot_product_attention."""
+        B, S, H, D = 1, 4, 8, 64
+        torch.manual_seed(42)
+        q = torch.randn(B, S, H, D)
+        k = torch.randn(B, S, H, D)
+        v = torch.randn(B, S, H, D)
+
+        result = simple_attention(q, k, v)
+
+        # Reference: PyTorch SDPA expects [B, H, S, D]
+        q_t = q.transpose(1, 2)
+        k_t = k.transpose(1, 2)
+        v_t = v.transpose(1, 2)
+        expected = torch.nn.functional.scaled_dot_product_attention(q_t, k_t, v_t)
+        expected = expected.transpose(1, 2)  # back to [B, S, H, D]
+
+        assert torch.allclose(result, expected, atol=1e-5), \
+            f"Max diff: {(result - expected).abs().max().item()}"
+
+    def test_causal_masking(self):
+        """With causal mask, first token should not see future tokens."""
+        B, S, H, D = 1, 4, 4, 32
+        torch.manual_seed(42)
+        q = torch.randn(B, S, H, D)
+        k = torch.randn(B, S, H, D)
+        v = torch.randn(B, S, H, D)
+        mask = make_causal_mask(S, device="cpu")
+
+        result1 = simple_attention(q, k, v, mask)
+
+        # Modify future tokens
+        k2, v2 = k.clone(), v.clone()
+        k2[:, 1:] = torch.randn_like(k2[:, 1:])
+        v2[:, 1:] = torch.randn_like(v2[:, 1:])
+        result2 = simple_attention(q, k2, v2, mask)
+
+        assert torch.allclose(result1[:, 0], result2[:, 0], atol=1e-5), \
+            "First token should not be affected by future tokens"
+
 
 class TestRMSNorm:
     """Test RMSNorm against a known reference."""

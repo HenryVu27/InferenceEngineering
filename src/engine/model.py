@@ -47,6 +47,111 @@ RMSNORM_EPS = 1e-6
 GQA_RATIO = NUM_Q_HEADS // NUM_KV_HEADS  # 7
 
 
+# ─── Building block operations ─────────────────────────────────────────────
+# These are stepping stones. Implement these first to build intuition,
+# then tackle the full model operations below.
+
+def softmax(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
+    """Numerically stable softmax.
+
+    softmax(x)_i = exp(x_i - max(x)) / sum(exp(x_j - max(x)))
+
+    Subtracting max(x) before exp() prevents overflow with large values.
+    This is mathematically equivalent to the naive version but won't produce
+    NaN/Inf when inputs are large (e.g., attention scores can reach ~100).
+
+    Args:
+        x: Input tensor of any shape.
+        dim: Dimension to apply softmax over.
+
+    Returns:
+        Probability distribution along dim (sums to 1).
+    """
+    # TODO: Implement numerically stable softmax.
+    #   1. max_val = x.max(dim=dim, keepdim=True).values
+    #   2. exp_x = torch.exp(x - max_val)      # subtract max for stability
+    #   3. return exp_x / exp_x.sum(dim=dim, keepdim=True)
+    #
+    # Why subtract max? Without it, exp(1000) = Inf. With it, exp(1000 - 1002) = exp(-2) = 0.13.
+    # The subtraction doesn't change the result because it cancels in the numerator/denominator.
+    #
+    # After implementing, compare: softmax(x, dim=-1) vs torch.softmax(x, dim=-1)
+    raise NotImplementedError
+
+
+def silu(x: torch.Tensor) -> torch.Tensor:
+    """SiLU (Sigmoid Linear Unit) activation: x * sigmoid(x).
+
+    Also called "swish". Used inside SwiGLU as the gating activation.
+    - silu(0) = 0 * 0.5 = 0
+    - silu(x) ≈ x for large positive x (sigmoid → 1)
+    - silu(x) ≈ 0 for large negative x (sigmoid → 0)
+    - Smooth, non-monotonic — slightly negative for x ≈ -1.28
+
+    Args:
+        x: Input tensor of any shape.
+
+    Returns:
+        Activated tensor, same shape.
+    """
+    # TODO: Implement SiLU.
+    #   sigmoid = 1 / (1 + torch.exp(-x))    — or use torch.sigmoid(x)
+    #   return x * sigmoid
+    #
+    # After implementing, compare: silu(x) vs torch.nn.functional.silu(x)
+    raise NotImplementedError
+
+
+def simple_attention(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Scaled dot-product attention (same head count for Q, K, V).
+
+    This is the basic attention mechanism WITHOUT GQA. Q, K, V all have the
+    same number of heads. Implement this first to understand the core algorithm,
+    then move to attention() which adds GQA head expansion.
+
+    scores = softmax((Q @ K^T) / sqrt(head_dim) + mask)
+    output = scores @ V
+
+    Args:
+        q: [batch, seq_len, num_heads, head_dim]
+        k: [batch, seq_len, num_heads, head_dim]  (same num_heads as q)
+        v: [batch, seq_len, num_heads, head_dim]  (same num_heads as q)
+        mask: Optional [1, 1, seq_len, seq_len]. 0 = attend, -inf = block.
+              Or boolean: True = attend, False = block.
+
+    Returns:
+        [batch, seq_len, num_heads, head_dim]
+    """
+    # TODO: Implement basic scaled dot-product attention.
+    #   1. Transpose to [B, heads, S, D] for batched matmul
+    #      q = q.transpose(1, 2)  (same for k, v)
+    #
+    #   2. Compute attention scores: Q @ K^T / sqrt(head_dim)
+    #      scale = 1.0 / (head_dim ** 0.5)
+    #      scores = (q @ k.transpose(-2, -1)) * scale   → [B, H, S, S]
+    #
+    #   3. Apply mask (if provided)
+    #      If boolean mask: scores = scores.masked_fill(mask == False, float('-inf'))
+    #      If additive mask: scores = scores + mask
+    #
+    #   4. Softmax over the last dim (key positions)
+    #      scores = torch.softmax(scores, dim=-1)      — or use your softmax()
+    #
+    #   5. Weighted sum: scores @ V
+    #      output = scores @ v                          → [B, H, S, D]
+    #
+    #   6. Transpose back: [B, H, S, D] → [B, S, H, D]
+    #      output = output.transpose(1, 2)
+    #
+    # Once this works, attention() below just adds KV head expansion before step 1.
+    raise NotImplementedError
+
+
 # ─── Weight loading ─────────────────────────────────────────────────────────
 
 def load_weights(model_dir: str | Path, device: str = "cuda", dtype: torch.dtype = torch.bfloat16) -> dict[str, torch.Tensor]:
