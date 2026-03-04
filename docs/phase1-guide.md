@@ -568,6 +568,21 @@ References:
 This is the core of Phase 1. Take it one function at a time.
 **After each function, validate against HuggingFace.**
 
+### Warm-up: Building Block Functions
+
+Before tackling the model operations, `model.py` includes three stepping-stone
+functions at the top. Implement these first to build intuition:
+
+1. **`softmax(x, dim)`** — numerically stable softmax. You'll use this inside
+   attention. Teaches the max-subtract trick for preventing overflow.
+2. **`silu(x)`** — the SiLU activation `x * sigmoid(x)`. You'll use this inside
+   SwiGLU. Teaches the gating concept.
+3. **`simple_attention(q, k, v, mask)`** — scaled dot-product attention where
+   Q, K, V all have the same head count. Teaches the core attention algorithm
+   before GQA adds the head-count mismatch complexity.
+
+These are tested independently in `tests/test_model.py`.
+
 ### 3.1 `load_weights(model_dir, device, dtype)` — get the model into memory
 
 **What are safetensors?** A file format for storing tensors (multi-dimensional arrays
@@ -896,6 +911,31 @@ def attention(q, k, v, mask=None):
 `repeat_interleave(7, dim=2)` copies each head 7 times along dimension 2:
 `[kv0, kv1, kv2, kv3]` → `[kv0, kv0, kv0, kv0, kv0, kv0, kv0, kv1, kv1, ...]`
 Now Q heads 0-6 share kv0, Q heads 7-13 share kv1, etc.
+
+**Alternative: broadcast-based GQA (memory-efficient)**
+
+Instead of copying KV heads 7 times (allocating 7x memory), you can use
+PyTorch's broadcasting to achieve the same result without extra allocations:
+
+```python
+# Reshape Q to expose the group structure
+# q: [B, S, 28, 128] → [B, S, 4, 7, 128]
+q = q.view(B, S, NUM_KV_HEADS, GQA_RATIO, HEAD_DIM)
+
+# K/V add a broadcast dimension
+# k: [B, S, 4, 128] → [B, S, 4, 1, 128]
+k = k.unsqueeze(3)
+v = v.unsqueeze(3)
+
+# Now Q @ K^T broadcasts: [B, 4, 7, S, D] @ [B, 4, 1, D, S] → [B, 4, 7, S, S]
+# The "1" in K's dim broadcasts to match Q's "7" without copying data.
+```
+
+This saves memory proportional to `GQA_RATIO` (7x for Qwen2.5-7B). For Phase 1
+with short sequences it doesn't matter much, but it becomes critical for long
+sequences in Phase 2+ where KV cache memory dominates.
+
+Try `repeat_interleave` first (simpler to debug), then refactor to broadcasting.
 
 **Step 2: Rearrange for matrix multiply**
 ```python
@@ -1273,6 +1313,7 @@ if not match:
 | NaN in output | Softmax overflow. Use `dtype=torch.float32` in `torch.softmax` |
 | Wrong tokens generated | Wrong causal mask orientation, or wrong EOS token IDs |
 | RoPE mismatch | Wrong theta (should be 1,000,000 not 10,000) or partial head_dim application |
+| RoPE outputs wrong values | Using interleaved (even/odd) instead of split-half variant. Qwen2.5 uses split-half in HuggingFace. See RoPE Variants section above. |
 | Shape mismatch error | Wrong reshape/view. Print shapes before and after each operation |
 
 ### 4.4 Debugging tip: print shapes everywhere
@@ -1311,3 +1352,7 @@ python run.py --model-dir ./models/Qwen2.5-7B-Instruct --interactive
 - [QwenLM tokenizer notes](https://github.com/QwenLM/Qwen/blob/main/tokenization_note.md) — official tokenizer docs
 - `docs/concepts/transformer_math_reference.md` — every formula with derivations
 - `docs/concepts/qwen2.5-7b-architecture.md` — all weight names, shapes, config values
+- [RoFormer: Rotary Position Embedding](https://arxiv.org/abs/2104.09864) (Su et al., 2021) — RoPE paper
+- [GQA: Training Generalized Multi-Query Transformer Models](https://arxiv.org/abs/2305.13245) (Ainslie et al., 2023) — GQA paper
+- [GLU Variants Improve Transformer](https://arxiv.org/abs/2002.05202) (Shazeer, 2020) — SwiGLU paper
+- [Attention Is All You Need](https://arxiv.org/abs/1706.03762) (Vaswani et al., 2017) — original transformer
