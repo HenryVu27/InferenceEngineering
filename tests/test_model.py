@@ -169,6 +169,51 @@ class TestSimpleAttention:
             "First token should not be affected by future tokens"
 
 
+class TestCausalMask:
+    """Test causal attention mask generation."""
+
+    def test_square_mask_values(self):
+        """4x4 causal mask should be lower-triangular."""
+        mask = make_causal_mask(4, device="cpu")
+        expected = torch.tensor([
+            [True, False, False, False],
+            [True, True,  False, False],
+            [True, True,  True,  False],
+            [True, True,  True,  True],
+        ]).unsqueeze(0).unsqueeze(0)
+        assert torch.equal(mask, expected), f"Mask values wrong:\n{mask.squeeze()}"
+
+    def test_square_mask_shape(self):
+        """Mask shape should be [1, 1, S, S]."""
+        mask = make_causal_mask(8, device="cpu")
+        assert mask.shape == (1, 1, 8, 8)
+
+    def test_rectangular_mask(self):
+        """Rectangular mask (L < S) for KV-cache decode compatibility.
+
+        When decoding with KV cache: query_len=1 (new token), key_len=5 (all tokens so far).
+        The mask should be [1, 1, 1, 5] — the new token can attend to all 5 positions.
+        """
+        mask = make_causal_mask(3, key_len=5, device="cpu")
+        # Row i can attend to columns 0..i+(key_len-query_len)
+        # For query_len=3, key_len=5, offset=2:
+        #   query 0 can see keys 0,1,2       (columns 0..2)
+        #   query 1 can see keys 0,1,2,3     (columns 0..3)
+        #   query 2 can see keys 0,1,2,3,4   (columns 0..4)
+        assert mask.shape == (1, 1, 3, 5)
+        # Last row (most recent query) should see all keys
+        assert mask[0, 0, 2, :].all(), "Last query should attend to all keys"
+        # First row should not see last two keys
+        assert not mask[0, 0, 0, 3], "First query should not see key at position 3"
+        assert not mask[0, 0, 0, 4], "First query should not see key at position 4"
+
+    def test_single_token_mask(self):
+        """Mask for single token (seq_len=1) should be all True."""
+        mask = make_causal_mask(1, device="cpu")
+        assert mask.shape == (1, 1, 1, 1)
+        assert mask.item() == True
+
+
 class TestRMSNorm:
     """Test RMSNorm against a known reference."""
 

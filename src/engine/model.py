@@ -346,18 +346,33 @@ def swiglu_ffn(
 
 # ─── Causal mask ────────────────────────────────────────────────────────────
 
-def make_causal_mask(seq_len: int, device: str = "cuda") -> torch.Tensor:
-    """Create causal attention mask (upper-triangular = -inf).
+def make_causal_mask(seq_len: int, key_len: int | None = None, device: str = "cuda") -> torch.Tensor:
+    """Create causal attention mask (upper-triangular = blocked).
+
+    Supports rectangular masks for KV-cache decode: query_len != key_len.
+    When key_len > seq_len, the mask allows each query to see further back
+    into the KV cache history.
 
     Args:
-        seq_len: Sequence length.
+        seq_len: Query sequence length (L).
+        key_len: Key sequence length (S). Defaults to seq_len if None.
         device: Target device.
 
     Returns:
-        Boolean mask [1, 1, seq_len, seq_len]. True = attend, False = mask.
+        Boolean mask [1, 1, seq_len, key_len]. True = attend, False = block.
+        mask[i][j] = True if j <= i + (key_len - seq_len)
     """
-    # TODO: Create lower-triangular boolean mask.
-    # mask[i][j] = True if j <= i (can attend to current and past positions)
+    # TODO: Create causal mask supporting both square (L=S) and rectangular (L<S).
+    #
+    #   For square (standard prefill):
+    #     torch.tril(torch.ones(S, S, dtype=torch.bool, device=device))
+    #
+    #   For rectangular (KV cache decode, L < S):
+    #     offset = key_len - seq_len
+    #     mask = torch.tril(torch.ones(seq_len, key_len, dtype=torch.bool, device=device), diagonal=offset)
+    #     The diagonal parameter shifts the triangle right by `offset` positions.
+    #
+    #   Then unsqueeze to [1, 1, L, S] for broadcasting across batch and heads.
     raise NotImplementedError
 
 
