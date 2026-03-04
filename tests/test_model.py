@@ -519,6 +519,30 @@ class TestSampler:
         assert result[3] == logits[3], "Non-repeated token should be unchanged"
 
 
+class TestEmbedding:
+    """Test embedding lookup."""
+
+    def test_lookup_shape(self):
+        """Embedding lookup should produce [B, S, hidden_dim]."""
+        vocab_size, hidden_dim = 100, 32
+        embed_weights = torch.randn(vocab_size, hidden_dim)
+        token_ids = torch.tensor([[1, 5, 10]])  # [1, 3]
+
+        # Embedding is just indexing: weights[token_ids]
+        result = embed_weights[token_ids]
+        assert result.shape == (1, 3, hidden_dim)
+
+    def test_lookup_values(self):
+        """Each row should match the corresponding weight row."""
+        vocab_size, hidden_dim = 100, 32
+        embed_weights = torch.randn(vocab_size, hidden_dim)
+        token_ids = torch.tensor([[3, 7]])
+
+        result = embed_weights[token_ids]
+        assert torch.equal(result[0, 0], embed_weights[3])
+        assert torch.equal(result[0, 1], embed_weights[7])
+
+
 # ─── Integration tests (need model weights) ─────────────────────────────────
 
 @requires_model
@@ -586,3 +610,46 @@ class TestAgainstHuggingFace:
 
         assert your_tokens == hf_tokens, \
             f"Generation mismatch:\n  yours: {your_tokens}\n  HF:    {hf_tokens}"
+
+
+@requires_model
+class TestTransformerBlock:
+    """Test a single transformer block against HuggingFace reference."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        from transformers import AutoModelForCausalLM
+
+        self.hf_model = AutoModelForCausalLM.from_pretrained(
+            MODEL_DIR,
+            torch_dtype=torch.bfloat16,
+            device_map="cpu",
+        )
+        self.hf_model.eval()
+        self.weights = load_weights(MODEL_DIR, device="cpu", dtype=torch.bfloat16)
+
+    def test_layer_0_output_matches(self):
+        """Single transformer block output should match HuggingFace layer 0."""
+        from src.engine.model import transformer_block
+
+        torch.manual_seed(42)
+        x = torch.randn(1, 4, HIDDEN_DIM, dtype=torch.bfloat16)
+        positions = torch.arange(4).unsqueeze(0)
+        mask = make_causal_mask(4, device="cpu")
+
+        # Your implementation
+        your_out = transformer_block(x, self.weights, layer_idx=0, positions=positions, mask=mask)
+
+        # HuggingFace reference — run layer 0 manually
+        hf_layer = self.hf_model.model.layers[0]
+        with torch.no_grad():
+            # HF needs [B, S, D] input and position_ids, attention_mask
+            hf_out = hf_layer(
+                x,
+                position_ids=positions,
+                attention_mask=mask.to(torch.bfloat16).masked_fill(mask == False, float('-inf')).masked_fill(mask == True, 0.0),
+            )
+            hf_hidden = hf_out[0]
+
+        assert torch.allclose(your_out, hf_hidden, atol=1e-3, rtol=1e-2), \
+            f"Layer 0 output diverges. Max diff: {(your_out - hf_hidden).abs().max().item()}"
