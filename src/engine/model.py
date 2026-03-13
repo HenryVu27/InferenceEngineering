@@ -76,7 +76,9 @@ def softmax(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
     # The subtraction doesn't change the result because it cancels in the numerator/denominator.
     #
     # After implementing, compare: softmax(x, dim=-1) vs torch.softmax(x, dim=-1)
-    raise NotImplementedError
+    max_val = x.max(dim=dim, keepdim=True).values
+    exp_x = torch.exp(x-max_val)
+    return exp_x/exp_x.sum(dim = dim, keepdim=True)
 
 
 def silu(x: torch.Tensor) -> torch.Tensor:
@@ -99,7 +101,8 @@ def silu(x: torch.Tensor) -> torch.Tensor:
     #   return x * sigmoid
     #
     # After implementing, compare: silu(x) vs torch.nn.functional.silu(x)
-    raise NotImplementedError
+    sigmoid = 1 / (1 + torch.exp(-x))
+    return x * sigmoid
 
 
 def simple_attention(
@@ -127,6 +130,17 @@ def simple_attention(
     Returns:
         [batch, seq_len, num_heads, head_dim]
     """
+    q = q.transpose(1, 2)
+    k = k.transpose(1, 2)
+    v = v.transpose(1, 2)
+    scale = 1.0/(HEAD_DIM**0.5)
+    scores = (q @ k.transpose(-2, -1)) * scale # [B, H, S, S] as we want score between every query and key
+    if mask is not None:
+        scores = scores.masked_fill(mask == False, float('-inf'))
+    scores = softmax(scores, dim=-1)
+    output = scores @ v
+    output = output.transpose(1, 2) # transpose back to [B, S, H, D]
+    return output
     # TODO: Implement basic scaled dot-product attention.
     #   1. Transpose to [B, heads, S, D] for batched matmul
     #      q = q.transpose(1, 2)  (same for k, v)
@@ -149,7 +163,6 @@ def simple_attention(
     #      output = output.transpose(1, 2)
     #
     # Once this works, attention() below just adds KV head expansion before step 1.
-    raise NotImplementedError
 
 
 # ─── Weight loading ─────────────────────────────────────────────────────────
@@ -174,7 +187,19 @@ def load_weights(model_dir: str | Path, device: str = "cuda", dtype: torch.dtype
     #       3. Collect all tensors into one dict, cast to dtype, move to device
     #       4. Validate: should have 323 tensors total
     # Hint: from safetensors.torch import load_file
-    raise NotImplementedError("Load safetensors shards")
+    model_dir = Path(model_dir)
+    with open(model_dir/"model.safetensors.index.json") as f:
+        index = json.load(f)
+    weight_map = index["weight_map"]
+    shard_files = set(weight_map.values())
+    weights = {}
+    for shard_file in sorted(shard_files):
+        shard_path = model_dir / shard_file
+        shard_weights = load_file(str(shard_path))
+        for name, tensor in shard_weights.items():
+            weights[name] = tensor.to(dtype=dtype, device=device)
+    assert len(weights) == 323, f"Expected 323 tensors, got {len(weights)}"
+    return weights
 
 
 # ─── Individual operations ──────────────────────────────────────────────────
@@ -190,6 +215,12 @@ def rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float = RMSNORM_EPS) -> 
     Returns:
         Normalized tensor, same shape as x.
     """
+    input_dtype = x.dtype
+    x_float = x.float()
+    ms = x_float.pow(2).mean(dim=-1, keepdim=True)
+    x_normed = x_float*torch.rsqrt(ms+eps)
+    rms = x_normed*weight
+    return rms.to(input_dtype)
     # TODO: Implement RMSNorm.
     #   1. Save input dtype: input_dtype = x.dtype
     #   2. Upcast to float32: x = x.float()
@@ -199,7 +230,6 @@ def rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float = RMSNORM_EPS) -> 
     #   3. Compute variance: variance = x.pow(2).mean(dim=-1, keepdim=True)
     #   4. Normalize: x = x * torch.rsqrt(variance + eps)
     #   5. Scale and cast back: return (x * weight).to(input_dtype)
-    raise NotImplementedError
 
 
 def rotary_embedding(q: torch.Tensor, k: torch.Tensor, positions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -230,6 +260,25 @@ def rotary_embedding(q: torch.Tensor, k: torch.Tensor, positions: torch.Tensor) 
     Returns:
         (q_rotated, k_rotated) — same shapes and dtype as inputs.
     """
+    step = 2
+    freqs = 1.0/(ROPE_THETA**(dim_indices/HEAD_DIM))
+    angles = positions.unsqueeze(-1).float()*freqs.unsqueeze(0).unsqueeze(0)
+    emb = torch.cat([angles, angles], dim=-1)
+    cos = torch.cos(emb).unsqueeze(2)
+    sin = torch.sin(emb).unsqueeze(2)
+    # Apply rotation for q
+    q_even=q[...,0::2]
+    q_odd=q[...,1::2]
+    q_rot_even = q_even*cos - q_odd*sin
+    q_rot_odd = q_even*sin + q_odd*cos
+    q_out = torch.stack([q_rot_even, q_rot_odd], dim=-1).flatten(-2)
+    # Apply rotation for k
+    k_even = k[..., 0::2]
+    k_odd = k[..., 1::2]
+    k_rot_even = k_even*cos - k_odd*sin
+    k_rot_odd = k_even*sin + k_odd*cos
+    k_out = torch.stack([k_rot_even, k_rot_odd], dim=-1).flatten(-2)
+    return q_out.to(q.dtype), k_out.to(k.dtype)
     # TODO: Implement RoPE (split-half variant to match HuggingFace).
     #
     #   1. Compute inverse frequencies:
@@ -263,7 +312,6 @@ def rotary_embedding(q: torch.Tensor, k: torch.Tensor, positions: torch.Tensor) 
     # Both are mathematically equivalent — they define different dimension pairings.
     # HuggingFace Qwen2 uses split-half (rotate_half), so we match it for correctness.
     # See: docs/phase1-guide.md "RoPE Variants" section for both implementations.
-    raise NotImplementedError
 
 
 def attention(
@@ -286,6 +334,25 @@ def attention(
     Returns:
         Attention output [batch, seq_len, num_q_heads, head_dim]
     """
+    q = q.view(B,S,NUM_KV_HEADS, GQA_RATIO, HEAD_DIM) # B, S, 28, 128 -> B, S, 4, 7, 128
+    k = k.unsqueeze(3) # -> B, S, 4, 1, 128
+    v = v.unsqueeze(3)
+
+    q = q.transpose(1,2)
+    k = k.transpose(1,2)
+    v = v.transpose(1,2)
+
+    # OR
+    # k = k.repeat_interleave(GQA_RATIO, dim=2)
+    # v = v.repeat_interview(GQA_RATIO, dim=2)
+    scale = 1.0/HEAD_DIM**0.5
+    scores = (q@k.transponse(-2, -1))*scale
+    if mask is not None:
+        scores = scores.masked_fill(mask==False, float('-inf'))
+    scores = softmax(scores, dim=-1)
+    output = scores @ v
+    output = output.transpose(1, 2) # transpose back to [B, S, H, D]
+    return output
     # TODO: Implement GQA.
     #
     #   Option A — repeat_interleave (simple, recommended first):
@@ -310,7 +377,6 @@ def attention(
     #      scores = torch.softmax(scores.float(), dim=-1).to(v.dtype)
     #   6. Compute output: scores @ V    → [B, heads, S, head_dim]
     #   7. Transpose back to [B, S, heads, head_dim]
-    raise NotImplementedError
 
 
 def swiglu_ffn(
@@ -335,6 +401,10 @@ def swiglu_ffn(
     Returns:
         Output [batch, seq_len, hidden_dim]
     """
+    gate = silu(x@gate_weight.T)
+    up = x@up_weight.t
+    return (gate*up)@down_weight.T
+
     # TODO: Implement SwiGLU.
     #   1. gate = x @ gate_weight.T        → [B, S, ffn_dim]
     #   2. gate = silu(gate)               → use YOUR silu() function (not torch's)
@@ -349,7 +419,6 @@ def swiglu_ffn(
     # how much of each up-projected feature to keep. This is why FFN dim is 5.29x
     # instead of the usual 4x — the third projection costs extra parameters.
     # Reference: "GLU Variants Improve Transformer" (Shazeer, 2020)
-    raise NotImplementedError
 
 
 # ─── Causal mask ────────────────────────────────────────────────────────────
@@ -381,7 +450,8 @@ def make_causal_mask(seq_len: int, key_len: int | None = None, device: str = "cu
     #     The diagonal parameter shifts the triangle right by `offset` positions.
     #
     #   Then unsqueeze to [1, 1, L, S] for broadcasting across batch and heads.
-    raise NotImplementedError
+    return torch.tril(torch.ones(seq_len, seq_len, device=device, dtype=torch.bool)).unsqueeze(0).unsqueeze(0)
+
 
 
 # ─── Transformer block ──────────────────────────────────────────────────────
@@ -416,7 +486,32 @@ def transformer_block(
         Output hidden states [batch, seq_len, hidden_dim]
     """
     prefix = f"model.layers.{layer_idx}"
+    x = rmsnorm(x, weights[f"{prefix}.input_layernorm.weight"])
+    B, S, _ = x.shape
+    q = (x @ weights[f"{prefix}.self_attn.q_proj.weight"].T + weights[f"{prefix}.self_attn.q_proj.bias"])
+    k = (x @ weights[f"{prefix}.self_attn.k_proj.weight"].T + weights[f"{prefix}.self_attn.k_proj.bias"])
+    v = (x @ weights[f"{prefix}.self_attn.v_proj.weight"].T + weights[f"{prefix}.self_attn.v_proj.bias"])
 
+    q = q.view(B, S, NUM_Q_HEADS, HEAD_DIM)
+    k = k.view(B, S, NUM_KV_HEADS, HEAD_DIM)
+    v = v.view(B, S, NUM_KV_HEADS, HEAD_DIM)
+
+    q, k = rotary_embedding(q, k, positions)
+    attn_out = attention(q, k, v, mask)
+    attn_out = attn_out.reshape(B, S, -1)
+    attn_out = attn_out@weights[f"{prefix}.self_attn.o_proj.weight"].T
+    x = residual + attn_out
+    residual = x
+    x = rmsnorm(x, weights[f"{prefix}.post_attention_layernorm.weight"])
+    x = swiglu_ffn(
+        x,
+        weights[f"{prefix}.mlp.gate_proj.weight"],
+        weights[f"{prefix}.mlp.up_proj.weight"],
+        weights[f"{prefix}.mlp.down_proj.weight"],
+    )
+    x = residual + x
+
+    return x
     # TODO: Implement the full transformer block.
     #
     # 1. Pre-attention norm
@@ -455,7 +550,6 @@ def transformer_block(
     #    x = residual + x
     #
     # return x
-    raise NotImplementedError
 
 
 # ─── Full forward pass ──────────────────────────────────────────────────────
